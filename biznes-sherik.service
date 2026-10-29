@@ -1,0 +1,23 @@
+[Unit]
+Description=Biznes Sherik Telegram AI Assistant Bot
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/biznes_sherik_bot
+EnvironmentFile=/opt/biznes_sherik_bot/.env
+ExecStart=/opt/biznes_sherik_bot/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/biznes_sherik_bot/bot.log
+StandardError=append:/opt/biznes_sherik_bot/bot.log
+
+# Security Sandbox options
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
