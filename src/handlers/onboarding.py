@@ -148,7 +148,7 @@ async def handle_start(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(OnboardingFSM.waiting_for_language, F.data.startswith("lang:"))
+@router.callback_query(F.data.startswith("lang:"))
 async def handle_language_choice(callback: CallbackQuery, state: FSMContext):
     """User picked language via inline buttons."""
     lang = callback.data.split(":")[1]
