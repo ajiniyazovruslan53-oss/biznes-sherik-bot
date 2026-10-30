@@ -56,13 +56,13 @@ def get_bot_and_dp():
     dp.callback_query.middleware(AccessMiddleware())
     dp.message.middleware(RateLimitMiddleware())
 
-    # Handlers (safely detach before attaching)
+    # Handlers (safely detach before attaching via _parent_router)
     routers = [
         admin_router, onboarding_router, modes_router,
         tasks_router, voice_router, photo_router, chat_router
     ]
     for r in routers:
-        r.parent_router = None
+        r._parent_router = None
         dp.include_router(r)
 
     _bot = bot
