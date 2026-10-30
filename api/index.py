@@ -21,49 +21,53 @@ if os.getenv("VERCEL"):
 
 _bot = None
 _dp = None
-_init_error = None
 
 
 def get_bot_and_dp():
-    """Lazily initializes Bot and Dispatcher to gracefully catch config errors."""
-    global _bot, _dp, _init_error
-    if _init_error:
-        raise _init_error
+    """Lazily initializes Bot and Dispatcher safely."""
+    global _bot, _dp
     if _bot is not None and _dp is not None:
         return _bot, _dp
 
-    try:
-        from src.config import config
-        from src.db.database import init_db
-        from src.handlers import register_all_handlers
-        from src.middleware import AccessMiddleware, RateLimitMiddleware
-        from aiogram import Bot, Dispatcher
-        from aiogram.enums import ParseMode
-        from aiogram.client.default import DefaultBotProperties
+    from src.config import config
+    from src.handlers.admin import router as admin_router
+    from src.handlers.onboarding import router as onboarding_router
+    from src.handlers.modes import router as modes_router
+    from src.handlers.tasks import router as tasks_router
+    from src.handlers.voice import router as voice_router
+    from src.handlers.photo import router as photo_router
+    from src.handlers.chat import router as chat_router
+    from src.middleware import AccessMiddleware, RateLimitMiddleware
+    from aiogram import Bot, Dispatcher
+    from aiogram.enums import ParseMode
+    from aiogram.client.default import DefaultBotProperties
 
-        if not config.BOT_TOKEN:
-            raise ValueError("BOT_TOKEN is not configured in Vercel Environment Variables.")
+    if not config.BOT_TOKEN:
+        raise ValueError("BOT_TOKEN is not configured in Vercel Environment Variables.")
 
-        bot = Bot(
-            token=config.BOT_TOKEN,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-        )
-        dp = Dispatcher()
+    bot = Bot(
+        token=config.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
+    dp = Dispatcher()
 
-        # Middlewares
-        dp.message.middleware(AccessMiddleware())
-        dp.callback_query.middleware(AccessMiddleware())
-        dp.message.middleware(RateLimitMiddleware())
+    # Middlewares
+    dp.message.middleware(AccessMiddleware())
+    dp.callback_query.middleware(AccessMiddleware())
+    dp.message.middleware(RateLimitMiddleware())
 
-        # Handlers
-        register_all_handlers(dp)
+    # Handlers (safely detach before attaching)
+    routers = [
+        admin_router, onboarding_router, modes_router,
+        tasks_router, voice_router, photo_router, chat_router
+    ]
+    for r in routers:
+        r.parent_router = None
+        dp.include_router(r)
 
-        _bot = bot
-        _dp = dp
-        return _bot, _dp
-    except Exception as e:
-        _init_error = e
-        raise e
+    _bot = bot
+    _dp = dp
+    return _bot, _dp
 
 
 _db_initialized = False
