@@ -19,17 +19,16 @@ if str(ROOT_DIR) not in sys.path:
 if os.getenv("VERCEL"):
     os.environ["DB_PATH"] = "/tmp/biznes_sherik.db"
 
-_bot = None
 _dp = None
+_db_initialized = False
 
 
-def get_bot_and_dp():
-    """Lazily initializes Bot and Dispatcher safely."""
-    global _bot, _dp
-    if _bot is not None and _dp is not None:
-        return _bot, _dp
+def get_dispatcher():
+    """Initializes Dispatcher once with middlewares and handlers."""
+    global _dp
+    if _dp is not None:
+        return _dp
 
-    from src.config import config
     from src.handlers.admin import router as admin_router
     from src.handlers.onboarding import router as onboarding_router
     from src.handlers.modes import router as modes_router
@@ -38,17 +37,8 @@ def get_bot_and_dp():
     from src.handlers.photo import router as photo_router
     from src.handlers.chat import router as chat_router
     from src.middleware import AccessMiddleware, RateLimitMiddleware
-    from aiogram import Bot, Dispatcher
-    from aiogram.enums import ParseMode
-    from aiogram.client.default import DefaultBotProperties
+    from aiogram import Dispatcher
 
-    if not config.BOT_TOKEN:
-        raise ValueError("BOT_TOKEN is not configured in Vercel Environment Variables.")
-
-    bot = Bot(
-        token=config.BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-    )
     dp = Dispatcher()
 
     # Middlewares
@@ -56,7 +46,7 @@ def get_bot_and_dp():
     dp.callback_query.middleware(AccessMiddleware())
     dp.message.middleware(RateLimitMiddleware())
 
-    # Handlers (safely detach before attaching via _parent_router)
+    # Handlers (cleanly reset parent before attaching)
     routers = [
         admin_router, onboarding_router, modes_router,
         tasks_router, voice_router, photo_router, chat_router
@@ -65,27 +55,58 @@ def get_bot_and_dp():
         r._parent_router = None
         dp.include_router(r)
 
-    _bot = bot
     _dp = dp
-    return _bot, _dp
+    return _dp
 
 
-_db_initialized = False
+def create_bot():
+    """Creates a fresh Bot instance tied to the active event loop."""
+    from src.config import config
+    from aiogram import Bot
+    from aiogram.enums import ParseMode
+    from aiogram.client.default import DefaultBotProperties
+
+    if not config.BOT_TOKEN:
+        raise ValueError("BOT_TOKEN is not configured in Vercel Environment Variables.")
+
+    return Bot(
+        token=config.BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
 
 
 async def process_telegram_update(data: dict):
-    """Feeds Telegram update to aiogram dispatcher."""
+    """Processes incoming Telegram update inside a fresh bot session."""
     global _db_initialized
-    bot, dp = get_bot_and_dp()
+    bot = create_bot()
+    dp = get_dispatcher()
 
-    if not _db_initialized:
-        from src.db.database import init_db
-        await init_db()
-        _db_initialized = True
+    try:
+        if not _db_initialized:
+            from src.db.database import init_db
+            await init_db()
+            _db_initialized = True
 
-    from aiogram.types import Update
-    update = Update.model_validate(data, context={"bot": bot})
-    await dp.feed_update(bot, update)
+        from aiogram.types import Update
+        update = Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+    finally:
+        await bot.session.close()
+
+
+async def check_health() -> dict:
+    """Performs quick healthcheck for GET request."""
+    bot = create_bot()
+    try:
+        me = await bot.get_me()
+        return {
+            "status": "online",
+            "bot": f"@{me.username}",
+            "name": me.first_name,
+            "message": "Webhook handler is running on Vercel."
+        }
+    finally:
+        await bot.session.close()
 
 
 class handler(BaseHTTPRequestHandler):
@@ -93,25 +114,16 @@ class handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            bot, dp = get_bot_and_dp()
+            health = asyncio.run(check_health())
             self.send_response(200)
             self.send_header("Content-type", "application/json; charset=utf-8")
             self.end_headers()
-            response = {
-                "status": "online",
-                "bot": "Biznes Sherik",
-                "message": "Webhook handler is running on Vercel."
-            }
-            self.wfile.write(json.dumps(response).encode("utf-8"))
+            self.wfile.write(json.dumps(health).encode("utf-8"))
         except Exception as e:
             self.send_response(500)
             self.send_header("Content-type", "application/json; charset=utf-8")
             self.end_headers()
-            response = {
-                "status": "error",
-                "error": str(e)
-            }
-            self.wfile.write(json.dumps(response).encode("utf-8"))
+            self.wfile.write(json.dumps({"status": "error", "error": str(e)}).encode("utf-8"))
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", 0))
